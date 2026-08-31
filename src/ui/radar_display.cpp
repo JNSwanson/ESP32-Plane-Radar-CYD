@@ -198,11 +198,16 @@ void initPalette() {
 }
 
 constexpr float kKmPerDeg = 111.0f;
+constexpr float kDegToRad = 3.14159265f / 180.0f;
 
 void offsetKmFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                         float* dist_km) {
-  *dx_km =
-      static_cast<float>(lon - services::location::lon()) * kKmPerDeg;
+  // Longitude degrees shrink toward the poles; scale by cos(latitude) so
+  // east-west distance isn't overstated away from the equator.
+  const float center_lat_rad =
+      static_cast<float>(services::location::lat()) * kDegToRad;
+  *dx_km = static_cast<float>(lon - services::location::lon()) * kKmPerDeg *
+           cosf(center_lat_rad);
   *dy_km =
       static_cast<float>(lat - services::location::lat()) * kKmPerDeg;
   *dist_km = sqrtf((*dx_km) * (*dx_km) + (*dy_km) * (*dy_km));
