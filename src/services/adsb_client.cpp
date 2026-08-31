@@ -224,10 +224,6 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     return false;
   }
 
-  // Cloudflare serves HTTP/1.1 as Transfer-Encoding: chunked with no
-  // Content-Length. readResponseBodyWithPoll() reads the raw socket, so
-  // chunk-size lines (a trailing "0") end up in the payload and ArduinoJson
-  // fails with InvalidInput. HTTP/1.0 gets a connection-delimited body.
   http.useHTTP10(true);
   http.setTimeout(kRequestTimeoutMs);
   const int code = performGetWithPoll(http);
