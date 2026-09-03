@@ -15,6 +15,7 @@
 #include "ui/radar_theme.h"
 #include "ui/runway_overlay.h"
 
+
 namespace ui {
 namespace radar {
 
@@ -28,10 +29,20 @@ uint16_t kColorTagType = 0x5DFF;
 uint16_t kColorTagAltitude = 0xFFE0;
 uint16_t kColorRunway = 0x4D5F;
 uint16_t kColorRunwayLabel = 0x7DFF;
+uint16_t kColorSweep = 0x07E0;
 
 }  // namespace radar
 
 namespace {
+
+constexpr int kControlLeft = radar::kSize;
+constexpr int kControlWidth = config::kDisplayWidth - radar::kSize;
+constexpr int kControlCenterX = kControlLeft + kControlWidth / 2;
+constexpr int kZoomButtonLeft = kControlLeft + 8;
+constexpr int kZoomButtonWidth = kControlWidth - 16;
+constexpr int kZoomInTop = 70;
+constexpr int kZoomOutTop = 140;
+constexpr int kZoomButtonHeight = 54;
 
 bool s_label_metrics_ready = false;
 bool s_cardinal_use_vlw = false;
@@ -52,6 +63,11 @@ int s_scale_label_h = 0;
 lgfx::LovyanGFX* s_draw = &tft;
 LGFX_Sprite s_frame(&tft);
 bool s_frame_ready = false;
+unsigned long s_last_sweep_frame_ms = 0;
+float s_previous_sweep_deg = 0.0f;
+bool s_previous_sweep_valid = false;
+uint16_t s_sweep_trail_colors[radar::kSweepTrailCount];
+services::adsb::Aircraft s_aircraft_snapshot[services::adsb::kMaxAircraft];
 
 class DrawScope {
  public:
@@ -177,14 +193,9 @@ void initPalette() {
   radar::kColorGrid = tft.color565(radar::kGridR, radar::kGridG, radar::kGridB);
   radar::kColorLabel = tft.color565(255, 255, 255);
   radar::kColorCenter = tft.color565(255, 255, 255);
-  // GC9A01 BGR panel: swap R/B in color565 so logical red renders red on screen.
-  if (config::kDisplayRgbOrder) {
-    radar::kColorAircraft =
-        tft.color565(radar::kAircraftB, radar::kAircraftG, radar::kAircraftR);
-  } else {
-    radar::kColorAircraft =
-        tft.color565(radar::kAircraftR, radar::kAircraftG, radar::kAircraftB);
-  }
+  // Panel RGB/BGR ordering is handled by LovyanGFX's panel configuration.
+  radar::kColorAircraft =
+      tft.color565(radar::kAircraftR, radar::kAircraftG, radar::kAircraftB);
   radar::kColorTrackVector =
       tft.color565(radar::kTrackR, radar::kTrackG, radar::kTrackB);
   radar::kColorTagType =
@@ -195,19 +206,26 @@ void initPalette() {
       tft.color565(radar::kRunwayR, radar::kRunwayG, radar::kRunwayB);
   radar::kColorRunwayLabel = tft.color565(radar::kRunwayLabelR, radar::kRunwayLabelG,
                                           radar::kRunwayLabelB);
+  radar::kColorSweep =
+      tft.color565(radar::kSweepR, radar::kSweepG, radar::kSweepB);
+  for (int i = 0; i < radar::kSweepTrailCount; ++i) {
+    // Oldest beam starts at 15% intensity and rises linearly to the bright
+    // leading edge, approximating a short phosphor decay.
+    const int strength =
+        15 + (85 * i) / (radar::kSweepTrailCount - 1);
+    s_sweep_trail_colors[i] = tft.color565(
+        radar::kSweepR * strength / 100,
+        radar::kSweepG * strength / 100,
+        radar::kSweepB * strength / 100);
+  }
 }
 
 constexpr float kKmPerDeg = 111.0f;
-constexpr float kDegToRad = 3.14159265f / 180.0f;
 
 void offsetKmFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                         float* dist_km) {
-  // Longitude degrees shrink toward the poles; scale by cos(latitude) so
-  // east-west distance isn't overstated away from the equator.
-  const float center_lat_rad =
-      static_cast<float>(services::location::lat()) * kDegToRad;
-  *dx_km = static_cast<float>(lon - services::location::lon()) * kKmPerDeg *
-           cosf(center_lat_rad);
+  *dx_km =
+      static_cast<float>(lon - services::location::lon()) * kKmPerDeg;
   *dy_km =
       static_cast<float>(lat - services::location::lat()) * kKmPerDeg;
   *dist_km = sqrtf((*dx_km) * (*dx_km) + (*dy_km) * (*dy_km));
@@ -488,8 +506,9 @@ void sortBeyondDotsFarFirst(BeyondDotDrawItem* items, size_t count) {
 void drawAircraft() {
   initLabelMetrics();
 
-  const size_t n = services::adsb::aircraftCount();
-  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
+  const size_t n = services::adsb::copyAircraft(
+      s_aircraft_snapshot, services::adsb::kMaxAircraft);
+  const services::adsb::Aircraft* planes = s_aircraft_snapshot;
 
   AircraftDrawItem items[services::adsb::kMaxAircraft];
   BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
@@ -616,6 +635,43 @@ void drawCenterDot(int cx, int cy) {
   s_draw->fillSmoothCircle(cx, cy, radar::kCenterDotRadius, radar::kColorCenter);
 }
 
+float sweepHeadingDeg(unsigned long now) {
+  const unsigned long phase_ms = now % radar::kSweepRevolutionMs;
+  return 360.0f * static_cast<float>(phase_ms) /
+         static_cast<float>(radar::kSweepRevolutionMs);
+}
+
+float normalizeSweepHeading(float heading_deg) {
+  while (heading_deg < 0.0f) {
+    heading_deg += 360.0f;
+  }
+  while (heading_deg >= 360.0f) {
+    heading_deg -= 360.0f;
+  }
+  return heading_deg;
+}
+
+void drawSweep(float heading_deg, uint16_t color) {
+  constexpr float kDegToRad = 0.01745329252f;
+  const float angle = heading_deg * kDegToRad;
+  const int x = radar::kCenterX + static_cast<int>(
+      lroundf(sinf(angle) * radar::kGridOuterRadius));
+  const int y = radar::kCenterY - static_cast<int>(
+      lroundf(cosf(angle) * radar::kGridOuterRadius));
+  s_draw->drawWideLine(radar::kCenterX, radar::kCenterY, x, y,
+                       radar::kSweepLineHalfWidth, color);
+}
+
+void drawSweepTrail(float head_deg) {
+  // Draw oldest first so the bright leading edge always wins at the centre.
+  for (int age = radar::kSweepTrailCount - 1; age >= 0; --age) {
+    const float angle = normalizeSweepHeading(
+        head_deg - static_cast<float>(age) * radar::kSweepStepDegrees);
+    const int color_index = radar::kSweepTrailCount - 1 - age;
+    drawSweep(angle, s_sweep_trail_colors[color_index]);
+  }
+}
+
 void drawCardinalLabels() {
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
@@ -663,25 +719,90 @@ bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
   }
-  s_frame.setColorDepth(16);
+  // The ESP32-WROOM-32 has no PSRAM. An RGB565 240x240 frame needs about
+  // 115 KB of contiguous heap and commonly fails after Wi-Fi/TLS allocation.
+  // RGB332 halves the frame to about 58 KB while retaining the radar palette.
+  s_frame.setColorDepth(8);
   if (!s_frame.createSprite(radar::kSize, radar::kSize)) {
-    Serial.println("radar: frame sprite alloc failed");
+    Serial.println("radar: 8-bit frame sprite alloc failed");
     return false;
   }
   s_frame_ready = true;
   return true;
 }
 
-// Double-buffered frame: composite the grid AND aircraft into the off-screen
-// sprite, then blit it to the panel in a single pushSprite. Because the panel
-// is updated in one pass, labels never show an erase/redraw gap — no flicker.
-void renderFrame() {
+void drawControlButton(const char* label, int top) {
+  constexpr uint16_t kButtonFill = 0x0841;
+  tft.fillRoundRect(kZoomButtonLeft, top, kZoomButtonWidth,
+                    kZoomButtonHeight, 8, kButtonFill);
+  tft.drawRoundRect(kZoomButtonLeft, top, kZoomButtonWidth,
+                    kZoomButtonHeight, 8, radar::kColorGrid);
+  displayFontSetBitmap(tft, &fonts::FreeSansBold18pt7b);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setTextColor(radar::kColorLabel, kButtonFill);
+  tft.drawString(label, kControlCenterX, top + kZoomButtonHeight / 2);
+}
+
+void drawControlPanel() {
+  tft.fillRect(kControlLeft, 0, kControlWidth, config::kDisplayHeight,
+               radar::kColorBackground);
+
+  // Use LovyanGFX's compact built-in font so the full word fits inside the
+  // narrow 80 px control strip on every panel/font build.
+  tft.setFont(&fonts::Font2);
+  tft.setTextSize(1);
+  tft.setTextDatum(textdatum_t::top_center);
+  tft.setTextColor(radar::kColorGrid, radar::kColorBackground);
+  tft.drawString("TRACKED", kControlCenterX, 5);
+
+  displayFontSetBitmap(tft, &fonts::FreeSansBold18pt7b);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  char count[8];
+  snprintf(count, sizeof(count), "%u",
+           static_cast<unsigned>(services::adsb::aircraftCount()));
+  tft.drawString(count, kControlCenterX, 43);
+
+  drawControlButton("+", kZoomInTop);
+  drawControlButton("-", kZoomOutTop);
+
+  tft.setFont(&fonts::Font2);
+  tft.setTextSize(1);
+  tft.setTextDatum(textdatum_t::top_center);
+  tft.setTextColor(radar::kColorGrid, radar::kColorBackground);
+  tft.drawString("ZOOM", kControlCenterX, 198);
+
+  char zoom_distance[12];
+  radar::formatCurrentRing3Label(zoom_distance, sizeof(zoom_distance));
+  tft.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  tft.drawString(zoom_distance, kControlCenterX, 219);
+  tft.setTextDatum(textdatum_t::top_left);
+}
+
+// Compose the entire radar in the 8-bit backbuffer, following micro-radar's
+// flicker-free approach: the panel only ever receives a completed frame.
+void renderRadarFrame(bool include_sweep, float sweep_deg) {
   drawStaticGrid(s_frame);  // opens its own DrawScope(s_frame)
   {
     const DrawScope scope(s_frame);
+    if (include_sweep) {
+      drawSweepTrail(sweep_deg);
+      // Keep informational graphics above the phosphor trail so it never
+      // changes the brightness or colour of labels and targets.
+      runway::drawLargeAirportRunways(s_frame);
+      drawCenterDot(radar::kCenterX, radar::kCenterY);
+      drawCardinalLabels();
+      drawScaleLabel(radar::kCenterX, radar::kCenterY,
+                     radar::kGridOuterRadius);
+    }
     drawAircraft();
   }
+}
+
+void presentRadarFrame() {
+  // Keep the 240x240 radar flush left and reserve the right side for controls.
   s_frame.pushSprite(0, 0);
+  drawControlPanel();
   tft.setTextDatum(textdatum_t::top_left);
 }
 
@@ -690,9 +811,15 @@ void renderFrame() {
 void radarDisplayDraw() {
   initPalette();
   initLabelMetrics();
+  s_last_sweep_frame_ms = millis();
+  s_previous_sweep_deg = sweepHeadingDeg(s_last_sweep_frame_ms);
 
   if (ensureFrameSprite()) {
-    renderFrame();
+    // Clear status/setup content from the 40 px margins around the radar square.
+    tft.fillScreen(radar::kColorBackground);
+    renderRadarFrame(radar::sweepEnabled(), s_previous_sweep_deg);
+    presentRadarFrame();
+    s_previous_sweep_valid = radar::sweepEnabled();
     return;
   }
 
@@ -700,6 +827,11 @@ void radarDisplayDraw() {
   const DrawScope scope(tft);
   drawStaticGrid(tft);
   drawAircraft();
+  if (radar::sweepEnabled()) {
+    drawSweepTrail(s_previous_sweep_deg);
+  }
+  drawControlPanel();
+  s_previous_sweep_valid = false;
   tft.setTextDatum(textdatum_t::top_left);
 }
 
@@ -707,11 +839,63 @@ void radarDisplayRefreshAircraft() {
   initPalette();
 
   if (ensureFrameSprite()) {
-    renderFrame();
+    renderRadarFrame(radar::sweepEnabled(), s_previous_sweep_deg);
+    presentRadarFrame();
+    s_previous_sweep_valid = radar::sweepEnabled();
     return;
   }
 
   radarDisplayDraw();
+}
+
+void radarDisplayAnimate() {
+  if (!s_frame_ready) {
+    return;
+  }
+  if (!radar::sweepEnabled()) {
+    if (s_previous_sweep_valid) {
+      renderRadarFrame(false, s_previous_sweep_deg);
+      s_frame.pushSprite(0, 0);
+    }
+    s_previous_sweep_valid = false;
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (now - s_last_sweep_frame_ms < radar::kSweepFrameIntervalMs) {
+    return;
+  }
+  s_last_sweep_frame_ms = now;
+
+  float sweep_deg = s_previous_sweep_valid
+                        ? s_previous_sweep_deg + radar::kSweepStepDegrees
+                        : sweepHeadingDeg(now);
+  while (sweep_deg >= 360.0f) {
+    sweep_deg -= 360.0f;
+  }
+  renderRadarFrame(true, sweep_deg);
+  s_frame.pushSprite(0, 0);
+  s_previous_sweep_deg = sweep_deg;
+  s_previous_sweep_valid = true;
+}
+
+RadarTouchAction radarDisplayHandleTouch(int x, int y) {
+  if (x >= 0 && x < radar::kSize && y >= 0 && y < radar::kSize) {
+    return radar::toggleSweep() ? RadarTouchAction::kSweepToggled
+                                : RadarTouchAction::kNone;
+  }
+  if (x < kZoomButtonLeft || x >= kZoomButtonLeft + kZoomButtonWidth) {
+    return RadarTouchAction::kNone;
+  }
+  if (y >= kZoomInTop && y < kZoomInTop + kZoomButtonHeight) {
+    radar::rangeZoomIn();
+    return RadarTouchAction::kRangeChanged;
+  }
+  if (y >= kZoomOutTop && y < kZoomOutTop + kZoomButtonHeight) {
+    radar::rangeZoomOut();
+    return RadarTouchAction::kRangeChanged;
+  }
+  return RadarTouchAction::kNone;
 }
 
 }  // namespace ui

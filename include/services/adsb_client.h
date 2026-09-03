@@ -19,6 +19,8 @@ constexpr size_t kMaxAircraft = 64;
 
 size_t aircraftCount();
 const Aircraft* aircraftList();
+/** Copy one coherent aircraft snapshot for cross-core display rendering. */
+size_t copyAircraft(Aircraft* out, size_t max_count);
 
 /** Hook invoked during long HTTP I/O (e.g. wifiLoop). Optional. */
 using PollFn = void (*)();

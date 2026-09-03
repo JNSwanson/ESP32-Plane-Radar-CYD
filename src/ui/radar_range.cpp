@@ -1,5 +1,6 @@
 #include "ui/radar_range.h"
 
+#include "config.h"
 #include "ui/radar_theme.h"
 
 #include <Preferences.h>
@@ -15,6 +16,8 @@ constexpr char kPrefsNamespace[] = "planeradar";
 constexpr char kPrefsRangeKey[] = "rangeIdx";
 constexpr char kPrefsMilesKey[] = "useMiles";
 constexpr char kPrefsRunwaysKey[] = "showRwys";
+constexpr char kPrefsSweepKey[] = "sweepOn";
+constexpr char kPrefsSweepDisabledKey[] = "sweepOff";
 constexpr uint8_t kDefaultRangeIndex = 1;  // 10 km ring
 constexpr float kKmPerMile = 1.609344f;
 
@@ -22,6 +25,8 @@ Preferences s_prefs;
 uint8_t s_range_index = kDefaultRangeIndex;
 bool s_use_miles = false;
 bool s_show_runways = true;
+bool s_sweep_enabled = config::kRadarSweepDefaultOn;
+bool s_sweep_disabled = false;
 
 void saveRangeIndex() {
   if (!s_prefs.begin(kPrefsNamespace, false)) {
@@ -44,6 +49,14 @@ void saveShowRunways() {
     return;
   }
   s_prefs.putBool(kPrefsRunwaysKey, s_show_runways);
+  s_prefs.end();
+}
+
+void saveSweepEnabled() {
+  if (!s_prefs.begin(kPrefsNamespace, false)) {
+    return;
+  }
+  s_prefs.putBool(kPrefsSweepKey, s_sweep_enabled);
   s_prefs.end();
 }
 
@@ -70,12 +83,29 @@ void rangeInit() {
       (saved < kRangePresetCount) ? saved : kDefaultRangeIndex;
   s_use_miles = s_prefs.getBool(kPrefsMilesKey, false);
   s_show_runways = s_prefs.getBool(kPrefsRunwaysKey, true);
+  s_sweep_enabled =
+      s_prefs.getBool(kPrefsSweepKey, config::kRadarSweepDefaultOn);
+  s_sweep_disabled = s_prefs.getBool(kPrefsSweepDisabledKey, false);
   s_prefs.end();
 }
 
 void rangeNext() {
   s_range_index = static_cast<uint8_t>((s_range_index + 1) % kRangePresetCount);
   saveRangeIndex();
+}
+
+void rangeZoomIn() {
+  if (s_range_index > 0) {
+    --s_range_index;
+    saveRangeIndex();
+  }
+}
+
+void rangeZoomOut() {
+  if (s_range_index + 1 < kRangePresetCount) {
+    ++s_range_index;
+    saveRangeIndex();
+  }
 }
 
 const RangePreset& rangeCurrent() { return kRangePresets[s_range_index]; }
@@ -93,6 +123,22 @@ bool useMiles() { return s_use_miles; }
 
 bool showRunways() { return s_show_runways; }
 
+bool sweepEnabled() {
+  return !s_sweep_disabled && s_sweep_enabled;
+}
+
+bool sweepDisabled() { return s_sweep_disabled; }
+
+bool toggleSweep() {
+  if (s_sweep_disabled) {
+    return false;
+  }
+  s_sweep_enabled = !s_sweep_enabled;
+  saveSweepEnabled();
+  Serial.printf("Radar sweep: %s\n", s_sweep_enabled ? "on" : "off");
+  return true;
+}
+
 void saveMilesFromPortal(const char* checkbox_value) {
   s_use_miles = portalCheckboxChecked(checkbox_value);
   saveUseMiles();
@@ -103,6 +149,22 @@ void saveRunwaysFromPortal(const char* checkbox_value) {
   s_show_runways = portalCheckboxChecked(checkbox_value);
   saveShowRunways();
   Serial.printf("Runway overlay: %s\n", s_show_runways ? "on" : "off");
+}
+
+void saveSweepDisabledFromPortal(const char* checkbox_value) {
+  s_sweep_disabled = portalCheckboxChecked(checkbox_value);
+  if (s_sweep_disabled) {
+    // A web-config disable is authoritative: leave the ordinary touch-toggle
+    // state off as well, so removing the lock does not restart unexpectedly.
+    s_sweep_enabled = false;
+    saveSweepEnabled();
+  }
+  if (s_prefs.begin(kPrefsNamespace, false)) {
+    s_prefs.putBool(kPrefsSweepDisabledKey, s_sweep_disabled);
+    s_prefs.end();
+  }
+  Serial.printf("Radar sweep web disable: %s\n",
+                s_sweep_disabled ? "on" : "off");
 }
 
 void formatRing3Label(char* buf, size_t len, float ring3_km, bool use_miles) {
@@ -122,9 +184,13 @@ void formatCurrentRing3Label(char* buf, size_t len) {
 void unitsReset() {
   s_use_miles = false;
   s_show_runways = true;
+  s_sweep_enabled = config::kRadarSweepDefaultOn;
+  s_sweep_disabled = false;
   if (s_prefs.begin(kPrefsNamespace, false)) {
     s_prefs.remove(kPrefsMilesKey);
     s_prefs.remove(kPrefsRunwaysKey);
+    s_prefs.remove(kPrefsSweepKey);
+    s_prefs.remove(kPrefsSweepDisabledKey);
     s_prefs.end();
   }
 }

@@ -23,26 +23,35 @@ constexpr unsigned long kWifiDownGraceMs = 4000;
 /** Minimum interval between background reconnect tries. */
 constexpr unsigned long kWifiReconnectIntervalMs = 15000;
 
-// --- BOOT button (ESP32-C3 Super Mini, active LOW) ---
-constexpr gpio_num_t kBootPin = GPIO_NUM_9;
+// --- BOOT button (ESP32-2432S028R CYD, active LOW) ---
+// CYD BOOT button is connected to GPIO0.
+constexpr gpio_num_t kBootPin = GPIO_NUM_0;
 constexpr unsigned long kBootResetHoldMs = 3000UL;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
 
-// --- Display: GC9A01 1.28" round 240×240 (SPI) ---
-constexpr gpio_num_t kDisplayPinRst = GPIO_NUM_0;
-constexpr gpio_num_t kDisplayPinCs = GPIO_NUM_1;
-constexpr gpio_num_t kDisplayPinDc = GPIO_NUM_10;
-constexpr gpio_num_t kDisplayPinMosi = GPIO_NUM_3;  // display SDA
-constexpr gpio_num_t kDisplayPinSclk = GPIO_NUM_4;  // display SCL
+// --- Display: ESP32-2432S028R CYD, ILI9341 2.8" 240×320 (landscape 320×240) ---
+constexpr gpio_num_t kDisplayPinRst = static_cast<gpio_num_t>(-1);
+constexpr gpio_num_t kDisplayPinCs = GPIO_NUM_15;
+constexpr gpio_num_t kDisplayPinDc = GPIO_NUM_2;
+constexpr gpio_num_t kDisplayPinMosi = GPIO_NUM_13;  // display SDA / MOSI
+constexpr gpio_num_t kDisplayPinMiso = GPIO_NUM_12;
+constexpr gpio_num_t kDisplayPinSclk = GPIO_NUM_14;
+constexpr gpio_num_t kDisplayPinBl = GPIO_NUM_21;   // backlight, active HIGH
 
-constexpr int kDisplayWidth = 240;
+// --- Touch: ESP32-2432S028R CYD, XPT2046 on separate software SPI ---
+constexpr gpio_num_t kTouchPinCs = GPIO_NUM_33;
+constexpr gpio_num_t kTouchPinMosi = GPIO_NUM_32;
+constexpr gpio_num_t kTouchPinMiso = GPIO_NUM_39;
+constexpr gpio_num_t kTouchPinSclk = GPIO_NUM_25;
+
+constexpr int kDisplayWidth = 320;
 constexpr int kDisplayHeight = 240;
 
 constexpr uint32_t kDisplaySpiWriteHz = 40000000;
-// GC9A01 modules often need invert + BGR for correct black/green output
-constexpr bool kDisplayInvert = true;
-constexpr bool kDisplayRgbOrder = true;
+// Standard CYD ILI9341 is BGR; LovyanGFX rgb_order=false selects BGR.
+constexpr bool kDisplayInvert = false;
+constexpr bool kDisplayRgbOrder = false;
 
 // --- Radar center defaults (overridden via WiFi setup portal) ---
 constexpr double kDefaultRadarLat = 52.3676;
@@ -54,6 +63,13 @@ constexpr unsigned long kAdsbFetchIntervalMs = 3000;
 constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
+
+// --- Animated radar sweep ---
+/** Initial state used until changed by radar touch. */
+constexpr bool kRadarSweepDefaultOn = false;
+/** ADS-B/TLS worker stack and core (CYD ESP32-WROOM-32 is dual-core). */
+constexpr uint32_t kAdsbTaskStackBytes = 10240;
+constexpr int kAdsbTaskCore = 0;
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;

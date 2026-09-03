@@ -4,7 +4,6 @@
 #include <WiFiManager.h>
 
 #include <cstdio>
-#include <cstring>
 
 #include <Preferences.h>
 #include <esp_system.h>
@@ -85,6 +84,11 @@ char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
 
+char s_sweep_disabled_checkbox_attrs[32] = "type=\"checkbox\"";
+WiFiManagerParameter s_param_sweep_disabled(
+    "disable_radar_sweep", "Disable radar sweep (blocks radar touch)", "T", 2,
+    s_sweep_disabled_checkbox_attrs, WFM_LABEL_AFTER);
+
 void refreshPortalParamDefaults() {
   char lat_buf[kCoordParamLen + 1];
   char lon_buf[kCoordParamLen + 1];
@@ -98,6 +102,10 @@ void refreshPortalParamDefaults() {
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
+  snprintf(s_sweep_disabled_checkbox_attrs,
+           sizeof(s_sweep_disabled_checkbox_attrs), "type=\"checkbox\"%s",
+           ui::radar::sweepDisabled() ? " checked" : "");
+  s_param_sweep_disabled.setValue("T", 2);
 }
 
 void onPortalParamsSaved() {
@@ -107,6 +115,8 @@ void onPortalParamsSaved() {
   }
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
+  ui::radar::saveSweepDisabledFromPortal(
+      s_param_sweep_disabled.getValue());
 }
 
 void attachPortalParams(WiFiManager& wm) {
@@ -115,6 +125,7 @@ void attachPortalParams(WiFiManager& wm) {
   wm.addParameter(&s_param_lon);
   wm.addParameter(&s_param_miles);
   wm.addParameter(&s_param_runways);
+  wm.addParameter(&s_param_sweep_disabled);
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
 
@@ -317,35 +328,16 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool connectSavedNetwork(bool show_ui) {
-  wifi_mode_t mode = WIFI_MODE_NULL;
-  if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_NULL) {
-    WiFi.mode(WIFI_STA);
-    delay(50);
-  }
-
-  wifi_config_t conf = {};
-  if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) {
+  if (!storedWifiCredentials()) {
     return false;
   }
 
-  if (conf.sta.ssid[0] == '\0') {
+  ensureWifiManager();
+  const String ssid = s_wm.getWiFiSSID();
+  if (ssid.length() == 0) {
     return false;
   }
-
-  // ESP-IDF stores the SSID in a fixed 32-byte field. A maximum-length
-  // SSID has no room for a trailing NUL, so copy it to a larger buffer
-  // and explicitly terminate it before constructing an Arduino String.
-  char ssid_buf[sizeof(conf.sta.ssid) + 1] = {};
-  memcpy(ssid_buf, conf.sta.ssid, sizeof(conf.sta.ssid));
-  ssid_buf[sizeof(conf.sta.ssid)] = '\0';
-
-  char pass_buf[sizeof(conf.sta.password) + 1] = {};
-  memcpy(pass_buf, conf.sta.password, sizeof(conf.sta.password));
-  pass_buf[sizeof(conf.sta.password)] = '\0';
-
-  const String ssid(ssid_buf);
-  const String pass(pass_buf);
-
+  const String pass = s_wm.getWiFiPass();
   return tryConnectWithUi(ssid, pass, show_ui);
 }
 

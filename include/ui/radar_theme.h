@@ -5,6 +5,7 @@
 namespace ui::radar {
 
 constexpr int kSize = 240;
+// Keep the radar square, centred on the CYD's 320x240 landscape display.
 constexpr int kCenterX = kSize / 2;
 constexpr int kCenterY = kSize / 2;
 
@@ -30,6 +31,19 @@ constexpr int kRingCount = 4;
 constexpr float kGridStrokeHalfWidth = 1.0f;
 
 constexpr int kCenterDotRadius = 2;
+
+/** Clockwise sweep animation. */
+constexpr unsigned long kSweepRevolutionMs = 6000;
+constexpr unsigned long kSweepFrameIntervalMs = 30;
+constexpr float kSweepStepDegrees =
+    360.0f * static_cast<float>(kSweepFrameIntervalMs) /
+    static_cast<float>(kSweepRevolutionMs);
+constexpr float kSweepLineHalfWidth = 1.0f;
+/** Number of beam positions retained in the fading phosphor-style trail. */
+constexpr int kSweepTrailCount = 5;
+constexpr uint8_t kSweepR = 40;
+constexpr uint8_t kSweepG = 255;
+constexpr uint8_t kSweepB = 90;
 
 /** Filled aircraft symbol (nose triangle). */
 constexpr int kAircraftNoseLenPx = 8;
@@ -99,5 +113,6 @@ extern uint16_t kColorTagType;
 extern uint16_t kColorTagAltitude;
 extern uint16_t kColorRunway;
 extern uint16_t kColorRunwayLabel;
+extern uint16_t kColorSweep;
 
 }  // namespace ui::radar

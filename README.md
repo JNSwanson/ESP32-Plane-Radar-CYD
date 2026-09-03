@@ -1,19 +1,15 @@
-# Plane Radar
+# Yet Another Plane Radar
 
-<img width="800" height="450" alt="plane-radar" src="https://github.com/user-attachments/assets/716d0992-dab8-47ba-8f1a-2aec7f607419" />
-
-**3D printed case (STL + assembly):** [MakerWorld](https://makerworld.com/en/models/2872376-esp32-plane-radar-live-ads-b-on-a-round-display#profileId-3207083) · **Firmware:** [Releases](https://github.com/MatixYo/ESP32-Plane-Radar/releases)
-
-Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (240×240). Shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
+Firmware ported to the **ESP32-2432S028R (CYD)** with its **2.8″ ILI9341** display (320×240 landscape). Shows a 240×240 circular **ADS-B radar** on the left, with aircraft count and XPT2046 touch zoom controls on the right, plus **WiFiManager** for first-time setup.
 
 ## What it does
 
 1. **Wi‑Fi setup** (if needed) — captive portal on AP **`PlaneRadar-Setup`**
 2. **Radar** — live aircraft from [adsb.fi](https://opendata.adsb.fi/) on a sonar-style grid
 
-After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
+After Wi‑Fi is saved, the device reconnects automatically. ADS-B updates run on core 0 while the display, touch controls, and optional sweep animation run on core 1.
 
-## Controls (BOOT, GPIO 9, active LOW)
+## Controls (BOOT, GPIO 0, active LOW)
 
 | Action | Effect |
 |--------|--------|
@@ -21,6 +17,13 @@ After Wi‑Fi is saved, the device reconnects automatically; the radar runs in t
 | **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
 
 During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
+
+### Touch controls
+
+| Area | Effect |
+|------|--------|
+| **Radar (left 240×240)** | Toggle the animated radar sweep on/off; saved across restarts |
+| **+ / − buttons** | Zoom in/out; the selected distance is shown below **ZOOM** |
 
 ## Wi‑Fi setup portal
 
@@ -33,7 +36,7 @@ During setup you can also hold BOOT at power-on to force a credential reset (sam
 **Reconfigure anytime** (after the device is on your network):
 
 1. Open **`http://plane-radar.local`** or **`http://<device-ip>`** (e.g. from your router or serial log at boot)
-2. Change Wi‑Fi, location, units, or runway overlay; save
+2. Change Wi‑Fi, location, units, runway overlay, or radar sweep; save
 
 The same portal runs on the setup AP and on the device’s LAN IP while connected to Wi‑Fi. mDNS hostname is `plane-radar` → **plane-radar.local** (`kPortalHostname` in `config.h`). Some clients resolve `.local` slowly; use the IP if needed.
 
@@ -44,6 +47,7 @@ The same portal runs on the setup AP and on the device’s LAN IP while connecte
 | **Latitude / Longitude** | Radar center and ADS-B query position (defaults in `config.h` until set) |
 | **Display distances in miles** | Ring scale label in **mi** instead of **km** (e.g. `6mi` vs `10km`) |
 | **Show airport runways** | Major-airport runway overlay on the radar (off to hide) |
+| **Disable radar sweep** | Forces the sweep off and blocks radar-area touch from enabling it |
 
 After a reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
 
@@ -86,7 +90,7 @@ As range decreases (or aircraft approach), targets move inward; beyond-ring dots
 
 - Source: `https://opendata.adsb.fi/api/v3/`
 - Fetch radius: `ui::radar::fetchRadiusKm()` — scales with the active preset to roughly the screen edge (so rim dots have data)
-- Poll interval: `kAdsbFetchIntervalMs` (5 s) in `config.h`
+- Poll interval: `kAdsbFetchIntervalMs` (3 s) in `config.h`
 - Ground aircraft hidden by default (`kAdsbShowGroundAircraft`)
 
 ## Configuration
@@ -101,6 +105,7 @@ Edit **`include/config.h`** for hardware and behavior:
 | Display SPI | pins, `kDisplayInvert`, `kDisplayRgbOrder`, `kDisplaySpiWriteHz` |
 | Default location | `kDefaultRadarLat`, `kDefaultRadarLon` (until portal overrides) |
 | ADS-B | `kAdsbFetchIntervalMs`, `kAdsbShowGroundAircraft` |
+| Radar sweep | `kRadarSweepDefaultOn` initial state; persistent disable is in the web configuration |
 
 Range presets: `include/ui/radar_range.h` (`kRangePresets`).
 
@@ -138,33 +143,33 @@ src/
   services/
 ```
 
-## Wiring (GC9A01 ↔ ESP32-C3 Super Mini)
+## CYD display wiring
 
-| Display | ESP32-C3 |
+| Signal | ESP32-WROOM-32 |
 |---------|----------|
-| VCC | 3V3 |
-| GND | GND |
-| RST | GPIO **0** |
-| CS | GPIO **1** |
-| DC | GPIO **10** |
-| SDA (MOSI) | GPIO **3** |
-| SCL (SCLK) | GPIO **4** |
-| BOOT (user) | GPIO **9** |
+| ILI9341 CS | GPIO **15** |
+| ILI9341 DC | GPIO **2** |
+| ILI9341 MOSI | GPIO **13** |
+| ILI9341 MISO | GPIO **12** |
+| ILI9341 SCLK | GPIO **14** |
+| Backlight | GPIO **21** |
+| BOOT (user) | GPIO **0** |
+| Display reset | Board reset (`-1` in LovyanGFX) |
 
 ## Build
 
 ```bash
-pio run -t upload
+pio run -e cyd -t upload
 pio device monitor
 ```
 
-- PlatformIO env: **`supermini`**
+- PlatformIO env: **`cyd`**
+- Board definition: **`esp32dev`**
 - Serial: **115200** baud
-- USB CDC on boot enabled in `platformio.ini` for the Super Mini
 
 ### Web-flashable release image
 
-Single `.bin` for [esptool-js](https://espressif.github.io/esptool-js/) and similar tools (ESP32-C3, 4 MB, flash at **0x0**):
+Single `.bin` for [esptool-js](https://espressif.github.io/esptool-js/) and similar tools (ESP32, 4 MB, flash at **0x0**):
 
 ```bash
 chmod +x scripts/merge-firmware.sh   # once
@@ -177,11 +182,11 @@ Writes `release/plane-radar-merged.bin`. Skip rebuild if firmware is already bui
 ./scripts/merge-firmware.sh --no-build
 ```
 
-Or via PlatformIO only (output: `.pio/build/supermini/firmware-merged.bin`):
+Or via PlatformIO only (output: `.pio/build/cyd/firmware-merged.bin`):
 
 ```bash
-pio run -e supermini
-pio run -t merge -e supermini
+pio run -e cyd
+pio run -t merge -e cyd
 ```
 
 Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with Chrome/Edge over USB.
@@ -190,7 +195,7 @@ Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with C
 
 | Workflow | When | Output |
 |----------|------|--------|
-| [Build](.github/workflows/build.yml) | Push / PR to `main` | Artifact `plane-radar-supermini` (merged + split `.bin` files, ~90 days) |
+| [Build](.github/workflows/build.yml) | Push / PR to `main` | CYD merged + split `.bin` files (~90 days) |
 | [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0`) | GitHub Release asset `plane-radar-v1.0.0.bin` + `.sha256` |
 
 To ship a version users can download:
@@ -200,7 +205,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The release workflow builds firmware in CI and attaches the merged image to the release. Download from **Releases** on GitHub, then flash at **0x0** (ESP32-C3, 4 MB).
+The release workflow builds firmware in CI and attaches the merged image to the release. Download from **Releases** on GitHub, then flash at **0x0** (ESP32, 4 MB).
 
 ## Dependencies
 

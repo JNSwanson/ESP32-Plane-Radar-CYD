@@ -1,5 +1,5 @@
 # PlatformIO post-build script: merge bootloader + partitions + app into one .bin
-# Usage: pio run -t merge -e supermini
+# Usage: pio run -t merge -e cyd
 
 Import("env")
 
