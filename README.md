@@ -1,5 +1,8 @@
 # Yet Another Plane Radar
 
+<img width="3324" height="1975" alt="Plane Radar CYD" src="https://github.com/user-attachments/assets/42832242-823f-4939-8b59-684363e68118" />
+
+
 Firmware ported to the **ESP32-2432S028R (CYD)** with its **2.8″ ILI9341** display (320×240 landscape). Shows a 240×240 circular **ADS-B radar** on the left, with aircraft count and XPT2046 touch zoom controls on the right, plus **WiFiManager** for first-time setup.
 
 ## What it does
